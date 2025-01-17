@@ -1,28 +1,19 @@
+import streamlit as st
 import os
 from transformers import pipeline
 from gtts import gTTS
-from playsound import playsound
-from pydub import AudioSegment
-import pyaudio
-import wave
-import speech_recognition as sr
 import tempfile
-from tkinter import Tk, filedialog
+import speech_recognition as sr
+from pydub import AudioSegment
 
-def text_summarization():
-    summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    print("Masukkan artikel untuk diringkas (tekan Enter pada baris kosong untuk menyelesaikan input):")
-    lines = []
-    while True:
-        line = input()
-        if line.strip() == "":
-            break
-        lines.append(line)
+# Load AI model for summarization
+@st.cache_resource
+def load_summarizer():
+    return pipeline("summarization", model="facebook/bart-large-cnn")
 
-    article = " ".join(lines)
+def text_summarization(summarizer, article):
     summary = summarizer(article, max_length=130, min_length=50, do_sample=False)
-    print("\nRingkasan:")
-    print(summary[0]['summary_text'])
+    return summary[0]['summary_text']
 
 def text_to_speech(text):
     try:
@@ -30,114 +21,92 @@ def text_to_speech(text):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
             temp_path = tmp_file.name
             tts.save(temp_path)
-        playsound(temp_path)
-        os.remove(temp_path)
+        return temp_path
     except Exception as e:
-        print(f"Error: {e}")
+        st.error(f"Error: {e}")
+        return None
 
-def text_summarization_with_speech():
-    summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    print("Masukkan artikel untuk diringkas (tekan Enter pada baris kosong untuk menyelesaikan input):")
-    lines = []
-    while True:
-        line = input()
-        if line.strip() == "":
-            break
-        lines.append(line)
-
-    article = " ".join(lines)
-    summary = summarizer(article, max_length=130, min_length=50, do_sample=False)
-    summary_text = summary[0]['summary_text']
-    print("\nRingkasan:")
-    print(summary_text)
-    text_to_speech(summary_text)
-
-def speech_to_text():
+def speech_to_text(audio_file):
     recognizer = sr.Recognizer()
-
-    def record_audio():
-        audio_format = pyaudio.paInt16
-        channels = 1
-        rate = 16000
-        chunk = 1024
-        output_file = "mic_recording.wav"
-
-        p = pyaudio.PyAudio()
-        stream = p.open(format=audio_format, channels=channels, rate=rate, input=True, frames_per_buffer=chunk)
-
-        print("Recording... Press Enter to stop.")
-        frames = []
-        try:
-            while True:
-                data = stream.read(chunk)
-                frames.append(data)
-        except KeyboardInterrupt:
-            print("Recording stopped.")
-        finally:
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-
-        with wave.open(output_file, 'wb') as wf:
-            wf.setnchannels(channels)
-            wf.setsampwidth(p.get_sample_size(audio_format))
-            wf.setframerate(rate)
-            wf.writeframes(b''.join(frames))
-
-        return output_file
-
-    def transcribe(file_path):
-        with sr.AudioFile(file_path) as source:
-            audio = recognizer.record(source)
-        return recognizer.recognize_google(audio)
-
-    print("Pilih opsi input:")
-    print("1. Rekam audio dengan mikrofon")
-    print("2. Pilih file audio")
-    choice = input("Masukkan pilihan (1/2): ")
-
-    if choice == "1":
-        audio_file = record_audio()
-    elif choice == "2":
-        root = Tk()
-        # root.withdraw()
-        audio_file = filedialog.askopenfilename(filetypes=[("Audio Files", "*.wav *.mp3")])
-    else:
-        print("Pilihan tidak valid.")
-        return
-
     try:
-        print("Transkripsi:")
-        print(transcribe(audio_file))
+        with sr.AudioFile(audio_file) as source:
+            audio = recognizer.record(source)
+        transcription = recognizer.recognize_google(audio)
+        return transcription
+    except sr.UnknownValueError:
+        return "Tidak dapat memahami audio. Pastikan suara jelas dan minim gangguan."
+    except sr.RequestError as e:
+        return f"Kesalahan pada layanan Speech Recognition: {e}"
+
+def convert_audio_to_wav(audio_file, input_format):
+    try:
+        wav_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+        audio = AudioSegment.from_file(audio_file, format=input_format)
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        audio.export(wav_file, format="wav")
+        return wav_file
     except Exception as e:
-        print(f"Error: {e}")
+        st.error(f"Gagal mengonversi {input_format} ke WAV: {e}")
+        return None
 
-def main_menu():
-    while True:
-        print("\nPilih fitur:")
-        print("1. Text Summarization")
-        print("2. Text Summarization & Text-to-Speech")
-        print("3. Speech-to-Text")
-        print("4. Text-to-Speech")
-        print("5. Keluar")
+# Streamlit Interface
+st.title("ComEsse: Ez Comm for all :)")
 
-        choice = input("Masukkan pilihan Anda (1-5): ")
+menu = ["Text Summarization", "Text Summarization & Text-to-Speech", "Speech-to-Text", "Text-to-Speech"]
+choice = st.sidebar.selectbox("Pilih fitur:", menu)
 
-        if choice == "1":
-            text_summarization()
-        elif choice == "2":
-            text_summarization_with_speech()
-        elif choice == "3":
-            speech_to_text()
-        elif choice == "4":
-            print("Masukkan teks untuk diubah menjadi suara:")
-            text = input("=> ")
-            text_to_speech(text)
-        elif choice == "5":
-            print("Keluar dari program.")
-            break
+summarizer = load_summarizer()
+
+if choice == "Text Summarization":
+    st.header("Text Summarization")
+    article = st.text_area("Masukkan artikel untuk diringkas:")
+    if st.button("Ringkas Teks"):
+        if article.strip():
+            summary = text_summarization(summarizer, article)
+            st.subheader("Ringkasan:")
+            st.write(summary)
         else:
-            print("Pilihan tidak valid. Silakan coba lagi.")
+            st.warning("Masukkan artikel yang valid.")
 
-if __name__ == "__main__":
-    main_menu()
+elif choice == "Text Summarization & Text-to-Speech":
+    st.header("Text Summarization & Text-to-Speech")
+    article = st.text_area("Masukkan artikel untuk diringkas:")
+    if st.button("Ringkas & Baca Teks"):
+        if article.strip():
+            summary = text_summarization(summarizer, article)
+            st.subheader("Ringkasan:")
+            st.write(summary)
+
+            audio_file = text_to_speech(summary)
+            if audio_file:
+                st.audio(audio_file, format="audio/mp3")
+        else:
+            st.warning("Masukkan artikel yang valid.")
+
+elif choice == "Speech-to-Text":
+    st.header("Speech-to-Text")
+    audio_file = st.file_uploader("Unggah file audio (MP3/WAV/M4A):", type=["mp3", "wav", "m4a"])
+    if st.button("Transkripsi Audio"):
+        if audio_file:
+            input_format = "mp3" if audio_file.name.endswith(".mp3") else "m4a" if audio_file.name.endswith(".m4a") else "wav"
+            if input_format in ["mp3", "m4a"]:
+                wav_file = convert_audio_to_wav(audio_file, input_format)
+                transcription = speech_to_text(wav_file)
+            else:
+                transcription = speech_to_text(audio_file.name)
+            
+            st.subheader("Hasil Transkripsi:")
+            st.write(transcription)
+        else:
+            st.warning("Unggah file audio terlebih dahulu.")
+
+elif choice == "Text-to-Speech":
+    st.header("Text-to-Speech")
+    text = st.text_area("Masukkan teks untuk diubah menjadi suara:")
+    if st.button("Ubah ke Suara"):
+        if text.strip():
+            audio_file = text_to_speech(text)
+            if audio_file:
+                st.audio(audio_file, format="audio/mp3")
+        else:
+            st.warning("Masukkan teks yang valid.")
